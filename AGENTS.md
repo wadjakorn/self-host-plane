@@ -1,0 +1,128 @@
+# AGENTS.md
+
+Operational reference for AI agents working in this repo. This is an **ops/deployment** repo,
+not an application codebase: it runs a self-hosted Plane instance and Plane's MCP server via
+Docker Compose. There is no app source to build or test here.
+
+## Environment
+
+- Docker engine is **Colima**. If Docker commands fail with a connection error, Colima is likely
+  stopped — check `colima status`; the user starts it with `colima start`. Do not stop Colima.
+- Use the standalone **`docker-compose`** binary. The `docker compose` plugin subcommand is NOT
+  available on this machine (`docker compose ...` errors with "unknown command").
+- Architecture: `arm64`. Working dir: repo root `plane.so/`.
+- Bash tool note: working directory persists between calls; shell env/vars do not.
+
+## Layout
+
+| Path | What |
+| ---- | ---- |
+| `plane-selfhost/setup.sh` | Official Plane installer/manager (verbs below) |
+| `plane-selfhost/plane-app/docker-compose.yaml` | Plane stack compose (generated) |
+| `plane-selfhost/plane-app/plane.env` | Plane config + secrets (ports, URLs, DB pw) |
+| `plane-selfhost/plane-app/plane.env.orig` | Pre-edit backup of plane.env |
+| `plane-mcp/docker-compose.yml` | MCP server service |
+| `plane-mcp/Dockerfile` | `pip install plane-mcp-server`, runs `http` mode |
+| `plane-mcp/.env` | MCP config (instance URL, port, dummy oauth) |
+
+## Operating the Plane stack
+
+Driven by `setup.sh` (accepts a verb, non-interactive):
+
+```bash
+cd plane-selfhost
+./setup.sh start | stop | restart | upgrade | install
+./setup.sh logs <web|space|api|worker|beat-worker|migrator|proxy|redis|postgres|minio|rabbitmq>
+./setup.sh backup
+```
+
+- Compose project name: `plane-app`. Containers: `plane-app-<service>-1`.
+- Docker network: `plane-app_default`. Proxy is reachable in-network as `http://proxy` (port 80).
+- Direct compose inspection (must pass env file, or you get blank-var warnings):
+  ```bash
+  docker-compose -f plane-app/docker-compose.yaml --env-file plane-app/plane.env ps
+  ```
+
+### Plane config (`plane-app/plane.env`)
+
+- `APP_DOMAIN` (currently `192.168.1.37`) feeds `WEB_URL=http://${APP_DOMAIN}`.
+- `LISTEN_HTTP_PORT=80`, `CORS_ALLOWED_ORIGINS` = comma-separated origins.
+- After editing: `./setup.sh restart`.
+
+### Access surfaces
+
+- App: `http://localhost` / `http://192.168.1.37`
+- Instance admin: `http://localhost/god-mode`
+- API base (host): `http://localhost/api/...` (e.g. `GET /api/instances/`)
+
+### DB access
+
+Postgres container `plane-app-plane-db-1`, db `plane`, user `plane`. Password lives in
+`plane.env` as `POSTGRES_PASSWORD`. Example:
+
+```bash
+PGPW=$(grep '^POSTGRES_PASSWORD=' plane-app/plane.env | cut -d= -f2)
+docker exec -e PGPASSWORD="$PGPW" plane-app-plane-db-1 psql -U plane -d plane -c "select email, is_superuser from users;"
+```
+
+`is_superuser = true` ⇒ instance (god-mode) admin. App users have it `false`.
+
+## Operating the MCP server
+
+```bash
+cd plane-mcp
+docker-compose up -d --build      # start / rebuild after editing .env
+docker-compose down               # stop
+docker-compose logs -f            # logs (JSON-formatted)
+```
+
+- Container `plane-mcp`, listens `0.0.0.0:8211`, joined to external network `plane-app_default`.
+- Reaches Plane via `PLANE_BASE_URL=http://proxy` (set in `.env`). No host-IP dependency.
+- **HTTP mode requires dummy OAuth env** (`PLANE_OAUTH_PROVIDER_CLIENT_ID/SECRET/BASE_URL`)
+  just to boot — they are NOT used by the api-key endpoint. Do not remove them.
+
+### MCP endpoints (from `plane_mcp/__main__.py`)
+
+| Mount | Auth | Use |
+| ----- | ---- | --- |
+| `/http/api-key/mcp` | request headers (`Authorization: Bearer <PAT>`, `X-Workspace-slug`) | **this is the one we use** |
+| `/http/mcp` | OAuth (needs real Plane OAuth app) | not configured |
+| `/` (sse) | OAuth | not configured |
+
+### Smoke test the endpoint
+
+```bash
+curl -s -X POST http://localhost:8211/http/api-key/mcp \
+  -H "Authorization: Bearer <PAT>" \
+  -H "X-Workspace-slug: <slug>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+Expect an SSE `event: message` with a JSON-RPC result listing tools (`list_projects`, etc.).
+
+## Claude Code registration
+
+- Registered at **user scope** (`~/.claude.json`): HTTP transport, URL
+  `http://localhost:8211/http/api-key/mcp`, with `Authorization` + `X-Workspace-slug` headers.
+- Re-register:
+  ```bash
+  claude mcp remove plane -s user
+  claude mcp add --transport http plane http://localhost:8211/http/api-key/mcp -s user \
+    --header "Authorization: Bearer <PAT>" --header "X-Workspace-slug: <slug>"
+  claude mcp get plane    # verify "Status: ✓ Connected"
+  ```
+- Tools surface as `mcp__plane__*` in NEW sessions only (not the session that registered them).
+
+## Gotchas / conventions
+
+- Credentials (PAT, slug) live in the Claude config, **not** in Compose files. Keep it that way;
+  the MCP image stays credential-less. Do not bake secrets into `Dockerfile`/`docker-compose.yml`.
+- If `curl` output looks truncated, the user's `rtk` shell wrapper is filtering it — prefix with
+  `rtk proxy curl ...` to get raw output.
+- Do not commit secrets: `plane.env` (DB/secret keys) and any real PAT must not be pushed.
+- Before destructive actions (DB writes, `down -v`, deleting volumes), confirm with the user —
+  Plane data (Postgres/MinIO) is not backed up unless `./setup.sh backup` was run.
+- If asked to expose MCP beyond localhost, remember the api-key endpoint trusts whoever sends the
+  header — put it behind the LAN/Tailscale only, not the public internet.

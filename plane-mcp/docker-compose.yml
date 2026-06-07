@@ -1,0 +1,19 @@
+services:
+  plane-mcp:
+    build: .
+    image: plane-mcp-local:latest
+    container_name: plane-mcp
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${MCP_PORT:-8211}:8211"
+    networks:
+      - plane
+
+# Reuse the network created by the Plane stack (plane-selfhost/plane-app).
+# Lets this container reach Plane at http://proxy (no host IP needed).
+# If your Plane network has a different name, run:  docker network ls | grep plane
+networks:
+  plane:
+    external: true
+    name: plane-app_default
