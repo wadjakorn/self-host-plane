@@ -6,7 +6,10 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${MCP_PORT:-8211}:8211"
+      # Loopback-only: the api-key endpoint trusts any caller with a valid PAT,
+      # so don't expose it to the LAN. Claude connects via localhost.
+      # To reach it from other hosts, front it with a reverse proxy + TLS instead.
+      - "127.0.0.1:${MCP_PORT:-8211}:8211"
     networks:
       - plane
 

@@ -50,13 +50,13 @@ cd plane-selfhost
 
 ### Plane config (`plane-app/plane.env`)
 
-- `APP_DOMAIN` (currently `192.168.1.37`) feeds `WEB_URL=http://${APP_DOMAIN}`.
+- `APP_DOMAIN` (the host LAN IP) feeds `WEB_URL=http://${APP_DOMAIN}`.
 - `LISTEN_HTTP_PORT=80`, `CORS_ALLOWED_ORIGINS` = comma-separated origins.
 - After editing: `./setup.sh restart`.
 
 ### Access surfaces
 
-- App: `http://localhost` / `http://192.168.1.37`
+- App: `http://localhost` / `http://<host-lan-ip>`
 - Instance admin: `http://localhost/god-mode`
 - API base (host): `http://localhost/api/...` (e.g. `GET /api/instances/`)
 
@@ -81,7 +81,10 @@ docker-compose down               # stop
 docker-compose logs -f            # logs (JSON-formatted)
 ```
 
-- Container `plane-mcp`, listens `0.0.0.0:8211`, joined to external network `plane-app_default`.
+- Container `plane-mcp`: listens `0.0.0.0:8211` inside, **published to `127.0.0.1:${MCP_PORT}`**
+  on the host (loopback only — do not change to `0.0.0.0` without a TLS reverse proxy). Runs
+  non-root; image pins `plane-mcp-server` (see `Dockerfile` ARG); has a TCP healthcheck.
+  Joined to external network `plane-app_default` (start the Plane stack first).
 - Reaches Plane via `PLANE_BASE_URL=http://proxy` (set in `.env`). No host-IP dependency.
 - **HTTP mode requires dummy OAuth env** (`PLANE_OAUTH_PROVIDER_CLIENT_ID/SECRET/BASE_URL`)
   just to boot — they are NOT used by the api-key endpoint. Do not remove them.

@@ -67,9 +67,11 @@ cd plane-selfhost
 | From                 | URL                       |
 | -------------------- | ------------------------- |
 | This host            | http://localhost          |
-| LAN / other devices  | http://192.168.1.37       |
-| Tailscale            | http://100.76.154.32      |
+| LAN / other devices  | http://&lt;host-lan-ip&gt;       |
+| Tailscale            | http://&lt;tailscale-ip&gt;      |
 | Instance admin       | http://localhost/god-mode |
+
+Find your host LAN IP with `ipconfig getifaddr en0` (macOS). Set `APP_DOMAIN` to it (below).
 
 First visit → create an account. The app login (`/`) and the instance-admin panel
 (`/god-mode`) are **separate** account systems.
@@ -79,7 +81,7 @@ First visit → create an account. The app login (`/`) and the instance-admin pa
 Edit `plane-selfhost/plane-app/plane.env`, then `./setup.sh restart`. See
 `plane-selfhost/plane.env.example` for the full annotated list. Key vars:
 
-- `APP_DOMAIN` — drives `WEB_URL`; set to the host/IP you reach Plane on (`192.168.1.37`).
+- `APP_DOMAIN` — drives `WEB_URL`; set to the host/IP you reach Plane on (e.g. your LAN IP).
 - `LISTEN_HTTP_PORT` — published HTTP port (default `80`).
 - `CORS_ALLOWED_ORIGINS` — comma-separated allowed origins.
 
@@ -92,9 +94,13 @@ cd plane-mcp
 docker-compose up -d --build
 ```
 
-This builds a small image (`pip install plane-mcp-server`) and runs it in **HTTP mode**,
-listening on port **8211**. It reaches the Plane API over the Plane stack's internal Docker
-network (`http://proxy`), so it does not depend on the host IP.
+This builds a small image (pinned `plane-mcp-server`, non-root, with a healthcheck) and runs it
+in **HTTP mode** on port **8211**, **published to loopback only** (`127.0.0.1:8211`) so the
+endpoint isn't exposed to the LAN. It reaches the Plane API over the Plane stack's internal
+Docker network (`http://proxy`), so it does not depend on the host IP.
+
+Start the Plane stack **before** the MCP server — the MCP service joins Plane's
+`plane-app_default` network, which must already exist.
 
 | Command                      | Action                  |
 | ---------------------------- | ----------------------- |
@@ -122,7 +128,7 @@ Auth is per request, via headers:
 - `X-Workspace-slug: <workspace-slug>`
 
 Generate a token in Plane: **Workspace Settings → API Tokens → Add** (shown once, copy it).
-The workspace slug is the segment in your URL: `http://192.168.1.37/<slug>/...`.
+The workspace slug is the segment in your URL: `http://<host>/<slug>/...`.
 
 ## 3. Connect Claude Code
 
